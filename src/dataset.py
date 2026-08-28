@@ -146,14 +146,16 @@ def build_candidate_pool(
 
     dataset = load_wmdp_bio()
 
-    # WMDP-Bio is expected to expose a train split.
-    if "train" not in dataset:
-        raise ValueError(
-            "Expected a 'train' split in WMDP-Bio."
-        )
+    # WMDP-Bio is expected to expose a test split.
+
 
     questions = normalize_split(dataset["train"])
+    if "test" not in dataset:
+        raise ValueError(
+            "Expected a 'test' split in WMDP-Bio."
+        )
 
+questions = normalize_split(dataset["test"])
     output_path.parent.mkdir(
         parents=True,
         exist_ok=True,
