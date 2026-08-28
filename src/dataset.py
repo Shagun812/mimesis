@@ -147,15 +147,13 @@ def build_candidate_pool(
     dataset = load_wmdp_bio()
 
     # WMDP-Bio is expected to expose a test split.
-
-
-    questions = normalize_split(dataset["train"])
     if "test" not in dataset:
         raise ValueError(
             "Expected a 'test' split in WMDP-Bio."
         )
 
-questions = normalize_split(dataset["test"])
+    questions = normalize_split(dataset["test"])
+
     output_path.parent.mkdir(
         parents=True,
         exist_ok=True,
@@ -379,7 +377,7 @@ if __name__ == "__main__":
     print("\nDataset:")
     print(inspect_dataset(dataset))
 
-    questions = normalize_split(dataset["train"])
+    questions = normalize_split(dataset["test"])
 
     validate_questions(questions)
 
