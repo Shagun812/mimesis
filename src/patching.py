@@ -207,14 +207,25 @@ def run_patched(
                 f"{tuple(output.shape)}, expected "
                 "[batch, sequence, hidden]."
             )
-
-        if output.shape != honest_activation.shape:
+        if output.ndim != 3 or honest_activation.ndim != 3:
             raise ValueError(
-                "Honest and Sandbagging activation shapes "
-                f"do not match: "
-                f"{tuple(honest_activation.shape)} vs "
-                f"{tuple(output.shape)}."
-            )
+            "Expected both activations to have shape "
+            "[batch, sequence_length, hidden_size]."
+        )
+
+        if output.shape[0] != honest_activation.shape[0]:
+            raise ValueError(
+            "Honest and Sandbagging batch sizes differ: "
+            f"{output.shape[0]} vs {honest_activation.shape[0]}."
+        )
+
+        if output.shape[2] != honest_activation.shape[2]:
+            raise ValueError(
+            "Honest and Sandbagging hidden sizes differ: "
+            f"{output.shape[2]} vs {honest_activation.shape[2]}."
+        )
+
+        
 
         patched_output = output.clone()
 
