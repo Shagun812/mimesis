@@ -207,30 +207,28 @@ def run_patched(
                 f"{tuple(output.shape)}, expected "
                 "[batch, sequence, hidden]."
             )
-        if output.ndim != 3 or honest_activation.ndim != 3:
+
+        if honest_activation.ndim != 3:
             raise ValueError(
-            "Expected both activations to have shape "
-            "[batch, sequence_length, hidden_size]."
-        )
+                "Cached Honest activation has shape "
+                f"{tuple(honest_activation.shape)}, expected "
+                "[batch, sequence, hidden]."
+            )
 
         if output.shape[0] != honest_activation.shape[0]:
             raise ValueError(
-            "Honest and Sandbagging batch sizes differ: "
-            f"{output.shape[0]} vs {honest_activation.shape[0]}."
-        )
+                "Honest and Sandbagging batch sizes differ: "
+                f"{output.shape[0]} vs {honest_activation.shape[0]}."
+            )
 
         if output.shape[2] != honest_activation.shape[2]:
             raise ValueError(
-            "Honest and Sandbagging hidden sizes differ: "
-            f"{output.shape[2]} vs {honest_activation.shape[2]}."
-        )
-
-        
+                "Honest and Sandbagging hidden sizes differ: "
+                f"{output.shape[2]} vs {honest_activation.shape[2]}."
+            )
 
         patched_output = output.clone()
 
-        # MIMESIS intervention:
-        # replace only the final input-token position.
         patched_output[:, -1, :] = (
             honest_activation[:, -1, :]
             .to(
