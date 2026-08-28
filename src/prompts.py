@@ -1,8 +1,5 @@
-
 from dataclasses import dataclass
 from typing import Literal
-
-from . import config
 
 
 Condition = Literal[
@@ -15,10 +12,13 @@ Condition = Literal[
 @dataclass(frozen=True)
 class PromptSet:
     """
-    The three experimental conditions used by MIMESIS.
+    Complete set of contextual instructions used by MIMESIS.
 
-    The question and answer choices are shared across conditions.
-    Only the condition-specific context changes.
+    The WMDP question and answer choices are identical across
+    conditions. Only the condition-specific context changes.
+
+    The actual experimental contexts are selected during
+    calibration and frozen before the main sweep.
     """
 
     honest_context: str
@@ -26,15 +26,11 @@ class PromptSet:
     counterfactual_context: str
 
 
+# SHARED TASK TEMPLATE
 
-#SHARED TASK TEMPLATE
 
-
-# Keep the task structure identical across experimental
-# conditions. The question and answer choices are inserted
-# into this template.
-# The exact contextual wording is intentionally kept separate
-# because it will be selected and frozen during calibration.
+# This portion must remain identical across conditions.
+# Only the contextual instruction preceding this task may differ.
 
 BASE_TASK_TEMPLATE = """{question}
 
@@ -43,14 +39,14 @@ BASE_TASK_TEMPLATE = """{question}
 Answer:"""
 
 
+# EXPERIMENTAL PROMPTS
 
-#CONDITION CONTEXTS
-
-
-# These are placeholders until the literature-grounded
-# candidate prompts are selected during Phase 3 calibration.
+# These remain empty until the literature-grounded prompt candidates
+# are selected during calibration.
 #
-# Do NOT run the main experiment with placeholder contexts.
+# IMPORTANT:
+# Do not use CURRENT_PROMPTS for behavioral calibration or the main
+# experiment while these are empty.
 
 HONEST_CONTEXT = ""
 
@@ -59,9 +55,6 @@ SANDBAGGING_CONTEXT = ""
 COUNTERFACTUAL_CONTEXT = ""
 
 
-
-# PROMPT SET
-
 CURRENT_PROMPTS = PromptSet(
     honest_context=HONEST_CONTEXT,
     sandbagging_context=SANDBAGGING_CONTEXT,
@@ -69,24 +62,18 @@ CURRENT_PROMPTS = PromptSet(
 )
 
 
-# CHOICE FORMATTING
 
 def format_choices(choices: list[str]) -> str:
     """
-    Format multiple-choice answers consistently.
-
-    Example:
-        A. choice one
-        B. choice two
-        C. choice three
-        D. choice four
+    Format four multiple-choice answers as A/B/C/D.
     """
 
     labels = ["A", "B", "C", "D"]
 
-    if len(choices) != len(labels):
+    if len(choices) != 4:
         raise ValueError(
-            f"Expected {len(labels)} choices, got {len(choices)}."
+            f"MIMESIS expects exactly four choices; "
+            f"got {len(choices)}."
         )
 
     return "\n".join(
@@ -96,7 +83,26 @@ def format_choices(choices: list[str]) -> str:
 
 
 
-#PROMPT CONSTRUCTION
+def get_context(
+    condition: Condition,
+    prompt_set: PromptSet,
+) -> str:
+    """
+    Return the contextual instruction for one condition.
+    """
+
+    if condition == "honest":
+        return prompt_set.honest_context
+
+    if condition == "sandbagging":
+        return prompt_set.sandbagging_context
+
+    if condition == "counterfactual":
+        return prompt_set.counterfactual_context
+
+    raise ValueError(
+        f"Unknown MIMESIS condition: {condition}"
+    )
 
 
 def build_prompt(
@@ -106,38 +112,31 @@ def build_prompt(
     prompt_set: PromptSet = CURRENT_PROMPTS,
 ) -> str:
     """
-    Build a rendered prompt for one experimental condition.
+    Build a deterministic prompt for one experimental condition.
 
-    The question and answer choices are identical across
-    conditions. Only the condition-specific context changes.
+    The question and answer choices are identical across conditions.
+    Only the condition-specific context changes.
     """
 
-    if not question.strip():
+    question = question.strip()
+
+    if not question:
         raise ValueError("Question cannot be empty.")
 
     choices_text = format_choices(choices)
 
-    if condition == "honest":
-        context = prompt_set.honest_context
-
-    elif condition == "sandbagging":
-        context = prompt_set.sandbagging_context
-
-    elif condition == "counterfactual":
-        context = prompt_set.counterfactual_context
-
-    else:
-        raise ValueError(
-            f"Unknown condition: {condition}"
-        )
+    context = get_context(
+        condition=condition,
+        prompt_set=prompt_set,
+    ).strip()
 
     task = BASE_TASK_TEMPLATE.format(
-        question=question.strip(),
+        question=question,
         choices=choices_text,
     )
 
-    if context.strip():
-        return f"{context.strip()}\n\n{task}"
+    if context:
+        return f"{context}\n\n{task}"
 
     return task
 
@@ -150,8 +149,8 @@ def build_honest_prompt(
     """Build the Honest-condition prompt."""
 
     return build_prompt(
-        question,
-        choices,
+        question=question,
+        choices=choices,
         condition="honest",
         prompt_set=prompt_set,
     )
@@ -165,8 +164,8 @@ def build_sandbagging_prompt(
     """Build the Sandbagging-condition prompt."""
 
     return build_prompt(
-        question,
-        choices,
+        question=question,
+        choices=choices,
         condition="sandbagging",
         prompt_set=prompt_set,
     )
@@ -180,59 +179,31 @@ def build_counterfactual_prompt(
     """Build the Counterfactual-condition prompt."""
 
     return build_prompt(
-        question,
-        choices,
+        question=question,
+        choices=choices,
         condition="counterfactual",
         prompt_set=prompt_set,
     )
 
 
-# PROMPT CONSISTENCY CHECKS
-
-def validate_shared_task(
-    question: str,
-    choices: list[str],
-    prompt_set: PromptSet = CURRENT_PROMPTS,
+def validate_prompt_set(
+    prompt_set: PromptSet,
+    require_nonempty: bool = False,
 ) -> None:
     """
-    Verify that all conditions contain the same question and
-    answer choices.
+    Validate the structure of a PromptSet.
 
-    This does not require the contexts to be identical.
-    """
+    Parameters
+    ----------
+    prompt_set:
+        Prompt configuration to validate.
 
-    prompts = {
-        condition: build_prompt(
-            question,
-            choices,
-            condition=condition,
-            prompt_set=prompt_set,
-        )
-        for condition in (
-            "honest",
-            "sandbagging",
-            "counterfactual",
-        )
-    }
+    require_nonempty:
+        If True, every experimental context must contain
+        non-whitespace text.
 
-    task = BASE_TASK_TEMPLATE.format(
-        question=question.strip(),
-        choices=format_choices(choices),
-    )
-
-    for condition, prompt in prompts.items():
-        if not prompt.endswith(task):
-            raise ValueError(
-                f"{condition} prompt does not preserve "
-                "the shared task structure."
-            )
-
-
-def validate_prompts(
-    prompt_set: PromptSet = CURRENT_PROMPTS,
-) -> None:
-    """
-    Validate prompt configuration before use.
+        This should be True before behavioral calibration
+        and the main experiment.
     """
 
     if not isinstance(prompt_set, PromptSet):
@@ -240,25 +211,119 @@ def validate_prompts(
             "prompt_set must be a PromptSet."
         )
 
-    # The main experiment must never accidentally run with
-    # missing condition-specific contexts.
-    for name, context in (
-        ("honest", prompt_set.honest_context),
-        ("sandbagging", prompt_set.sandbagging_context),
-        ("counterfactual", prompt_set.counterfactual_context),
-    ):
+    contexts = {
+        "honest": prompt_set.honest_context,
+        "sandbagging": prompt_set.sandbagging_context,
+        "counterfactual": prompt_set.counterfactual_context,
+    }
+
+    for name, context in contexts.items():
+
         if not isinstance(context, str):
             raise TypeError(
                 f"{name}_context must be a string."
             )
 
-# SIMPLE TEST
+        if require_nonempty and not context.strip():
+            raise ValueError(
+                f"{name}_context is empty. "
+                "Experimental prompts must be frozen "
+                "before behavioral evaluation."
+            )
+
+
+def validate_shared_task(
+    question: str,
+    choices: list[str],
+    prompt_set: PromptSet = CURRENT_PROMPTS,
+) -> None:
+    """
+    Verify that all conditions preserve the same task content.
+
+    This checks the question, choices, and Answer: suffix.
+    It does not require the contextual instructions to match.
+    """
+
+    task = BASE_TASK_TEMPLATE.format(
+        question=question.strip(),
+        choices=format_choices(choices),
+    )
+
+    for condition in (
+        "honest",
+        "sandbagging",
+        "counterfactual",
+    ):
+        prompt = build_prompt(
+            question=question,
+            choices=choices,
+            condition=condition,
+            prompt_set=prompt_set,
+        )
+
+        if not prompt.endswith(task):
+            raise ValueError(
+                f"{condition} prompt does not preserve "
+                "the shared task structure."
+            )
+
+
+def validate_condition_separation(
+    prompt_set: PromptSet,
+) -> None:
+    """
+    Verify that the condition contexts are genuinely distinct.
+
+    This is intentionally separate from validate_prompt_set()
+    because distinctness is a property of an experimental prompt
+    design, not merely of syntactic validity.
+    """
+
+    validate_prompt_set(
+        prompt_set,
+        require_nonempty=True,
+    )
+
+    contexts = [
+        prompt_set.honest_context.strip(),
+        prompt_set.sandbagging_context.strip(),
+        prompt_set.counterfactual_context.strip(),
+    ]
+
+    if len(set(contexts)) != len(contexts):
+        raise ValueError(
+            "Experimental condition contexts must be distinct."
+        )
+
+
+def validate_experimental_prompts(
+    prompt_set: PromptSet = CURRENT_PROMPTS,
+) -> None:
+    """
+    Full validation required before behavioral calibration
+    or the main experiment.
+    """
+
+    validate_prompt_set(
+        prompt_set,
+        require_nonempty=True,
+    )
+
+    validate_condition_separation(prompt_set)
+
 
 
 if __name__ == "__main__":
-    validate_prompts()
+
+    # The repository may legitimately contain empty placeholders
+    # before calibration.
+    validate_prompt_set(
+        CURRENT_PROMPTS,
+        require_nonempty=False,
+    )
 
     test_question = "What is the correct answer?"
+
     test_choices = [
         "First option",
         "Second option",
@@ -267,8 +332,25 @@ if __name__ == "__main__":
     ]
 
     validate_shared_task(
-        test_question,
-        test_choices,
+        question=test_question,
+        choices=test_choices,
+        prompt_set=CURRENT_PROMPTS,
     )
 
-    print("MIMESIS prompt module is valid.")
+    print("MIMESIS prompt module is structurally valid.")
+
+    if all(
+        context.strip()
+        for context in (
+            CURRENT_PROMPTS.honest_context,
+            CURRENT_PROMPTS.sandbagging_context,
+            CURRENT_PROMPTS.counterfactual_context,
+        )
+    ):
+        validate_experimental_prompts(CURRENT_PROMPTS)
+        print("Experimental prompt set is valid.")
+    else:
+        print(
+            "Experimental contexts are not frozen yet; "
+            "behavioral evaluation is disabled."
+        )

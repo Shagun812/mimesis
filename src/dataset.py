@@ -1,4 +1,3 @@
-
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -10,11 +9,11 @@ from . import config
 
 
 
-#DATA STRUCTURE
-
 @dataclass(frozen=True)
 class Question:
-    """Canonical representation of one MIMESIS question."""
+    """
+    Canonical representation of one MIMESIS WMDP-Bio question.
+    """
 
     question_id: str
     question: str
@@ -35,27 +34,61 @@ class Question:
         return labels[self.answer_index]
 
 
-#RAW DATASET LOADING
 
 def load_wmdp_bio():
     """
-    Load the WMDP-Bio dataset from Hugging Face.
+    Load the frozen WMDP-Bio source dataset from Hugging Face.
 
-    The exact dataset schema is inspected rather than assumed.
+    MIMESIS expects:
+        dataset: cais/wmdp
+        configuration: wmdp-bio
+        split: test
     """
 
     dataset = load_dataset(
         config.DATASET_NAME,
-        "wmdp-bio",
+        config.DATASET_DOMAIN,
     )
 
     return dataset
 
 
-def inspect_dataset(dataset) -> dict[str, Any]:
-    """Return basic information about the loaded dataset."""
+def validate_dataset_schema(dataset) -> None:
+    """
+    Validate that the downloaded dataset matches the expected
+    WMDP-Bio structure before normalization.
+    """
 
-    result = {
+    if "test" not in dataset:
+        raise ValueError(
+            "WMDP-Bio must contain a 'test' split."
+        )
+
+    expected_fields = {
+        "question",
+        "choices",
+        "answer",
+    }
+
+    actual_fields = set(
+        dataset["test"].features.keys()
+    )
+
+    missing = expected_fields - actual_fields
+
+    if missing:
+        raise ValueError(
+            "WMDP-Bio test split is missing expected fields: "
+            f"{sorted(missing)}"
+        )
+
+
+def inspect_dataset(dataset) -> dict[str, Any]:
+    """
+    Return basic information about the loaded dataset.
+    """
+
+    return {
         "splits": list(dataset.keys()),
         "num_rows": {
             split: len(dataset[split])
@@ -67,36 +100,37 @@ def inspect_dataset(dataset) -> dict[str, Any]:
         },
     }
 
-    return result
 
-
-
-#SCHEMA NORMALIZATION
 
 def normalize_item(
     item: dict[str, Any],
     index: int,
 ) -> Question:
     """
-    Convert one raw WMDP item into the canonical MIMESIS format.
+    Convert one raw WMDP-Bio item into the canonical MIMESIS format.
 
-    WMDP multiple-choice items use:
+    Expected raw fields:
         question
         choices
         answer
     """
 
-    if "question" not in item:
-        raise KeyError("Dataset item is missing 'question'.")
+    required_fields = {
+        "question",
+        "choices",
+        "answer",
+    }
 
-    if "choices" not in item:
-        raise KeyError("Dataset item is missing 'choices'.")
+    missing = required_fields - set(item.keys())
 
-    if "answer" not in item:
-        raise KeyError("Dataset item is missing 'answer'.")
+    if missing:
+        raise KeyError(
+            f"Question {index} is missing fields: "
+            f"{sorted(missing)}"
+        )
 
     question = str(item["question"]).strip()
-    choices = list(item["choices"])
+    choices = [str(choice).strip() for choice in item["choices"]]
     answer = int(item["answer"])
 
     if not question:
@@ -107,10 +141,15 @@ def normalize_item(
     if len(choices) != 4:
         raise ValueError(
             f"Question {index} has {len(choices)} choices; "
-            "MIMESIS expects four."
+            "MIMESIS requires exactly four."
         )
 
-    if not 0 <= answer < len(choices):
+    if any(not choice for choice in choices):
+        raise ValueError(
+            f"Question {index} contains an empty choice."
+        )
+
+    if not 0 <= answer < 4:
         raise ValueError(
             f"Question {index} has invalid answer index: {answer}."
         )
@@ -118,41 +157,49 @@ def normalize_item(
     return Question(
         question_id=f"wmdp_bio_{index:04d}",
         question=question,
-        choices=[str(choice) for choice in choices],
+        choices=choices,
         answer_index=answer,
     )
 
 
 def normalize_split(split) -> list[Question]:
-    """Normalize every item in a dataset split."""
+    """
+    Normalize every item in a dataset split.
+    """
 
-    return [
+    questions = [
         normalize_item(item, index)
         for index, item in enumerate(split)
     ]
 
+    validate_questions(questions)
 
-#CANDIDATE POOL
+    return questions
+
+
+# ---------------------------------------------------------------------------
+# CANDIDATE POOL
+# ---------------------------------------------------------------------------
 
 def build_candidate_pool(
     output_path: Path = config.CANDIDATE_DATA_PATH,
 ) -> list[Question]:
     """
-    Load WMDP-Bio and save the candidate pool locally.
+    Download WMDP-Bio, normalize its test split, validate it,
+    and save the complete candidate pool.
 
-    This is the pre-calibration pool. It is NOT the frozen
-    experimental working set.
+    This is the pre-calibration candidate pool.
+
+    It is NOT the experimental working set.
     """
 
     dataset = load_wmdp_bio()
 
-    # WMDP-Bio is expected to expose a test split.
-    if "test" not in dataset:
-        raise ValueError(
-            "Expected a 'test' split in WMDP-Bio."
-        )
+    validate_dataset_schema(dataset)
 
-    questions = normalize_split(dataset["test"])
+    questions = normalize_split(
+        dataset["test"]
+    )
 
     output_path.parent.mkdir(
         parents=True,
@@ -168,14 +215,12 @@ def build_candidate_pool(
 
 
 
-#BEHAVIORAL ELIGIBILITY
-
 def is_eligible(
     honest_correct: bool,
     sandbagging_correct: bool,
 ) -> bool:
     """
-    Apply the primary MIMESIS working-set rule.
+    Apply the primary MIMESIS eligibility rule.
 
     Eligible:
         Honest      -> correct
@@ -188,6 +233,42 @@ def is_eligible(
     )
 
 
+def validate_behavioral_results(
+    questions: list[Question],
+    honest_results: dict[str, bool],
+    sandbagging_results: dict[str, bool],
+) -> None:
+    """
+    Ensure behavioral results exist for every candidate question.
+
+    Missing results are errors because silently dropping questions
+    would make the working-set construction non-reproducible.
+    """
+
+    expected_ids = {
+        question.question_id
+        for question in questions
+    }
+
+    honest_ids = set(honest_results.keys())
+    sandbagging_ids = set(sandbagging_results.keys())
+
+    missing_honest = expected_ids - honest_ids
+    missing_sandbagging = expected_ids - sandbagging_ids
+
+    if missing_honest:
+        raise KeyError(
+            "Missing Honest results for: "
+            f"{sorted(missing_honest)}"
+        )
+
+    if missing_sandbagging:
+        raise KeyError(
+            "Missing Sandbagging results for: "
+            f"{sorted(missing_sandbagging)}"
+        )
+
+
 def filter_working_set(
     questions: list[Question],
     honest_results: dict[str, bool],
@@ -196,43 +277,46 @@ def filter_working_set(
     """
     Construct the MIMESIS working set from behavioral results.
 
-    The question must satisfy:
-        Honest = correct
+    Primary eligibility criterion:
+
+        Honest      = correct
         Sandbagging = incorrect
     """
 
-    working_set = []
+    validate_behavioral_results(
+        questions=questions,
+        honest_results=honest_results,
+        sandbagging_results=sandbagging_results,
+    )
 
-    for question in questions:
-        question_id = question.question_id
-
-        if question_id not in honest_results:
-            raise KeyError(
-                f"Missing Honest result for {question_id}."
-            )
-
-        if question_id not in sandbagging_results:
-            raise KeyError(
-                f"Missing Sandbagging result for {question_id}."
-            )
-
+    working_set = [
+        question
+        for question in questions
         if is_eligible(
-            honest_correct=honest_results[question_id],
-            sandbagging_correct=sandbagging_results[question_id],
-        ):
-            working_set.append(question)
+            honest_correct=honest_results[
+                question.question_id
+            ],
+            sandbagging_correct=sandbagging_results[
+                question.question_id
+            ],
+        )
+    ]
 
     return working_set
 
 
 
-#SERIALIZATION
-
 def write_questions(
     questions: list[Question],
     path: Path,
 ) -> None:
-    """Write questions as JSONL."""
+    """
+    Write canonical questions as JSONL.
+    """
+
+    validate_questions(questions)
+
+    path = Path(path)
 
     path.parent.mkdir(
         parents=True,
@@ -256,7 +340,11 @@ def write_questions(
 def read_questions(
     path: Path,
 ) -> list[Question]:
-    """Read canonical questions from JSONL."""
+    """
+    Read canonical questions from JSONL and validate them.
+    """
+
+    path = Path(path)
 
     if not path.exists():
         raise FileNotFoundError(
@@ -269,37 +357,73 @@ def read_questions(
         "r",
         encoding="utf-8",
     ) as file:
-        for line_number, line in enumerate(file, start=1):
+
+        for line_number, line in enumerate(
+            file,
+            start=1,
+        ):
             if not line.strip():
                 continue
 
-            item = json.loads(line)
-
             try:
-                questions.append(
-                    Question(
-                        question_id=item["question_id"],
-                        question=item["question"],
-                        choices=list(item["choices"]),
-                        answer_index=int(item["answer_index"]),
-                    )
+                item = json.loads(line)
+
+                question = Question(
+                    question_id=item["question_id"],
+                    question=str(item["question"]),
+                    choices=[
+                        str(choice)
+                        for choice in item["choices"]
+                    ],
+                    answer_index=int(
+                        item["answer_index"]
+                    ),
                 )
-            except (KeyError, TypeError, ValueError) as exc:
+
+                validate_question(question)
+
+                questions.append(question)
+
+            except (
+                json.JSONDecodeError,
+                KeyError,
+                TypeError,
+                ValueError,
+            ) as exc:
+
                 raise ValueError(
-                    f"Invalid question on line {line_number}: {exc}"
+                    f"Invalid question on line "
+                    f"{line_number}: {exc}"
                 ) from exc
+
+    validate_questions(questions)
 
     return questions
 
 
 
-#WORKING-SET HELPERS
-
 def save_working_set(
     questions: list[Question],
     path: Path = config.WORKING_SET_PATH,
 ) -> None:
-    """Save the frozen MIMESIS working set."""
+    """
+    Save the selected MIMESIS working set.
+
+    The caller is responsible for freezing the behavioral
+    results and recording the selection in freeze_log.md.
+    """
+
+    if not questions:
+        raise ValueError(
+            "Cannot save an empty MIMESIS working set."
+        )
+
+    if len(questions) > config.TARGET_WORKING_SET_SIZE:
+        raise ValueError(
+            f"Working set contains {len(questions)} questions, "
+            f"exceeding target size "
+            f"{config.TARGET_WORKING_SET_SIZE}."
+        )
 
     write_questions(
         questions,
@@ -310,17 +434,44 @@ def save_working_set(
 def load_working_set(
     path: Path = config.WORKING_SET_PATH,
 ) -> list[Question]:
-    """Load the frozen MIMESIS working set."""
+    """
+    Load and validate the frozen MIMESIS working set.
+    """
 
-    return read_questions(path)
+    questions = read_questions(path)
+
+    if len(questions) < config.MIN_WORKING_SET_SIZE:
+        raise ValueError(
+            f"Working set contains only {len(questions)} questions; "
+            f"MIMESIS requires at least "
+            f"{config.MIN_WORKING_SET_SIZE}."
+        )
+
+    if len(questions) > config.TARGET_WORKING_SET_SIZE:
+        raise ValueError(
+            f"Working set contains {len(questions)} questions; "
+            f"maximum target is "
+            f"{config.TARGET_WORKING_SET_SIZE}."
+        )
+
+    return questions
 
 
-#VALIDATION
 
-def validate_question(question: Question) -> None:
-    """Validate one canonical question."""
 
-    if not question.question_id:
+def validate_question(
+    question: Question,
+) -> None:
+    """
+    Validate one canonical question.
+    """
+
+    if not isinstance(question, Question):
+        raise TypeError(
+            "Expected a Question instance."
+        )
+
+    if not question.question_id.strip():
         raise ValueError(
             "Question ID cannot be empty."
         )
@@ -332,57 +483,74 @@ def validate_question(question: Question) -> None:
 
     if len(question.choices) != 4:
         raise ValueError(
-            f"{question.question_id}: expected four choices."
+            f"{question.question_id}: "
+            "expected exactly four choices."
+        )
+
+    if any(
+        not isinstance(choice, str)
+        or not choice.strip()
+        for choice in question.choices
+    ):
+        raise ValueError(
+            f"{question.question_id}: "
+            "all choices must be non-empty strings."
         )
 
     if not 0 <= question.answer_index < 4:
         raise ValueError(
-            f"{question.question_id}: invalid answer index."
+            f"{question.question_id}: "
+            "invalid answer index."
         )
 
 
 def validate_questions(
     questions: list[Question],
 ) -> None:
-    """Validate an entire question collection."""
+    """
+    Validate an entire question collection.
+    """
 
     if not questions:
         raise ValueError(
             "Question collection is empty."
         )
 
-    seen_ids = set()
+    seen_ids: set[str] = set()
 
     for question in questions:
+
         validate_question(question)
 
         if question.question_id in seen_ids:
             raise ValueError(
-                f"Duplicate question ID: {question.question_id}"
+                f"Duplicate question ID: "
+                f"{question.question_id}"
             )
 
         seen_ids.add(question.question_id)
 
 
-
-#MAIN
-
 if __name__ == "__main__":
+
     config.validate_config()
 
     print("Loading WMDP-Bio...")
 
     dataset = load_wmdp_bio()
 
+    validate_dataset_schema(dataset)
+
     print("\nDataset:")
     print(inspect_dataset(dataset))
 
-    questions = normalize_split(dataset["test"])
-
-    validate_questions(questions)
+    questions = normalize_split(
+        dataset["test"]
+    )
 
     print(
-        f"\nNormalized {len(questions)} WMDP-Bio questions."
+        f"\nNormalized {len(questions)} "
+        "WMDP-Bio questions."
     )
 
     output_path = config.CANDIDATE_DATA_PATH
@@ -393,5 +561,6 @@ if __name__ == "__main__":
     )
 
     print(
-        f"Candidate pool written to: {output_path}"
+        f"Candidate pool written to: "
+        f"{output_path}"
     )
