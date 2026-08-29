@@ -1,19 +1,29 @@
 from pathlib import Path
+import os
 
 
-#PROJECT PATHS
+# PROJECT PATHS
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 CONFIG_DIR = PROJECT_ROOT / "configs"
-DATA_DIR = PROJECT_ROOT / "data"
-RESULTS_DIR = PROJECT_ROOT / "results"
-CHECKPOINT_DIR = RESULTS_DIR / "checkpoints"
-ACTIVATIONS_DIR = PROJECT_ROOT / "activations"
-FIGURES_DIR = PROJECT_ROOT / "figures"
-LOGS_DIR = PROJECT_ROOT / "logs"
 
+
+_drive_root = os.environ.get("MIMESIS_DRIVE_ROOT")
+
+if _drive_root:
+    ARTIFACT_ROOT = Path(_drive_root)
+else:
+    ARTIFACT_ROOT = PROJECT_ROOT
+
+
+DATA_DIR = ARTIFACT_ROOT / "data"
+RESULTS_DIR = ARTIFACT_ROOT / "results"
+CHECKPOINT_DIR = RESULTS_DIR / "checkpoints"
+ACTIVATIONS_DIR = ARTIFACT_ROOT / "activations"
+FIGURES_DIR = ARTIFACT_ROOT / "figures"
+LOGS_DIR = ARTIFACT_ROOT / "logs"
 
 
 #MODEL
@@ -41,8 +51,8 @@ SEED = 42
 #DATASET
 
 
-DATASET_NAME = "wmdp"
-DATASET_DOMAIN = "bio"
+DATASET_NAME = "cais/wmdp"
+DATASET_DOMAIN = "wmdp-bio"
 
 CANDIDATE_DATA_PATH = DATA_DIR / "wmdp_bio_candidates.jsonl"
 WORKING_SET_PATH = DATA_DIR / "working_set.jsonl"
@@ -155,13 +165,17 @@ COUNTERFACTUAL_RESULTS_DIR = (
 
 # CONFIG VALIDATION
 
-
 def validate_config() -> None:
     """Validate the MIMESIS experiment configuration."""
 
     if MODEL_NAME != "Qwen/Qwen3-4B":
         raise ValueError(
-            "MIMESIS V1 is frozen to Qwen3-3B."
+            "MIMESIS V1 is frozen to Qwen/Qwen3-4B."
+        )
+
+    if not ARTIFACT_ROOT.exists():
+        raise ValueError(
+            f"Artifact root does not exist: {ARTIFACT_ROOT}"
         )
 
     if LOCALIZED_BAND_THRESHOLD_PP <= 0:
@@ -190,7 +204,6 @@ def validate_config() -> None:
         raise ValueError(
             "Target time cannot exceed hard-stop time."
         )
-
 
 if __name__ == "__main__":
     validate_config()
