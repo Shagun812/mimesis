@@ -215,6 +215,10 @@ def run_patched(
                 "[batch, sequence, hidden]."
             )
 
+        # Sequence lengths may differ across conditions.
+        # Only batch size and hidden size must match because
+        # the intervention replaces the final token only.
+
         if output.shape[0] != honest_activation.shape[0]:
             raise ValueError(
                 "Honest and Sandbagging batch sizes differ: "

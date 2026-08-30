@@ -73,7 +73,7 @@ def load_model(
     device: torch.device,
     dtype: torch.dtype,
 ):
-    """Load Qwen3-3B for inference."""
+    """Load Qwen3-4B for inference."""
 
     model = AutoModelForCausalLM.from_pretrained(
         config.MODEL_NAME,
