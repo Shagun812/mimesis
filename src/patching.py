@@ -324,7 +324,7 @@ def capture_activations(
             handles.append(handle)
 
         with torch.inference_mode():
-            model(**inputs, use_cache=False)
+            model(**inputs)
 
     finally:
         for handle in handles:
@@ -358,20 +358,15 @@ def run_unpatched(
     Run a normal forward pass without intervention.
     """
 
-    outputs = model(**inputs, use_cache=False)
+    outputs = model(**inputs)
 
     if not hasattr(outputs, "logits"):
         raise AttributeError(
             "Model output does not contain logits."
         )
 
-    # Move logits off GPU immediately. Do not retain GPU-resident
-    # vocabulary logits across repeated interventions.
-    logits_cpu = outputs.logits.detach().cpu()
-    del outputs
-
     return ForwardResult(
-        logits=logits_cpu,
+        logits=outputs.logits.detach(),
         activations=None,
     )
 
@@ -616,7 +611,7 @@ def run_patched(
     )
 
     try:
-        outputs = model(**inputs, use_cache=False)
+        outputs = model(**inputs)
 
     finally:
         handle.remove()
@@ -626,13 +621,8 @@ def run_patched(
             "Patched model output does not contain logits."
         )
 
-    # Move logits off GPU immediately so patched results cannot retain
-    # the model's vocabulary-sized output on the T4.
-    logits_cpu = outputs.logits.detach().cpu()
-    del outputs
-
     return ForwardResult(
-        logits=logits_cpu,
+        logits=outputs.logits.detach(),
         activations=None,
     )
 
@@ -959,7 +949,7 @@ def run_activation_replacement_test(
 
     try:
         with torch.inference_mode():
-            outputs = model(**inputs, use_cache=False)
+            outputs = model(**inputs)
 
     finally:
         handle.remove()
