@@ -1,0 +1,12 @@
+Metric,Result
+Frozen questions,56
+Honest baseline,100%
+Sandbagging baseline,0%
+L23 restoration,67.9%
+L24 restoration,91.1%
+L23 → L24 jump,+23.2 pp
+L31 restoration,98.2%
+L34 restoration,100.0%
+Normalized recovery n,50
+CF baseline,91.1%
+CF-eligible n,5
